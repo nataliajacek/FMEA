@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ca">
+
+<head>
+<meta charset="UTF-8">
+<title>FMEA Generator</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+
+<style>
+
+body{
+    font-family:'Inter',sans-serif;
+    background:#f4f6f9;
+    margin:0;
+}
+
+/* contenedor central */
+
+.container{
+    max-width:900px;
+    margin:40px auto;
+    background:white;
+    padding:40px;
+    border-radius:10px;
+    box-shadow:0 8px 20px rgba(0,0,0,0.08);
+}
+
+/* titulos */
+
+h1{
+    text-align:center;
+    color:#1F4E78;
+    margin-bottom:30px;
+}
+
+h2{
+    margin-top:35px;
+    padding-bottom:6px;
+    border-bottom:2px solid #e6e6e6;
+    color:#1F4E78;
+    font-size:20px;
+}
+
+/* labels */
+
+label{
+    font-weight:600;
+    display:block;
+    margin-top:15px;
+    margin-bottom:5px;
+}
+
+/* inputs */
+
+input,textarea{
+    width:100%;
+    padding:10px;
+    border-radius:6px;
+    border:1px solid #ccc;
+    font-size:14px;
+    transition:border 0.2s, box-shadow 0.2s;
+}
+
+input:focus, textarea:focus{
+    outline:none;
+    border-color:#1F4E78;
+    box-shadow:0 0 0 2px rgba(31,78,120,0.15);
+}
+
+/* grid */
+
+.grid-2{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:20px;
+}
+
+/* secciones */
+
+.section{
+    background:#fafafa;
+    padding:20px;
+    border-radius:8px;
+    margin-top:20px;
+}
+
+/* boton */
+
+button{
+    margin-top:30px;
+    background:linear-gradient(135deg,#1F4E78,#2e75b6);
+    color:white;
+    padding:12px 26px;
+    border-radius:6px;
+    border:none;
+    font-size:16px;
+    font-weight:600;
+    cursor:pointer;
+    transition:transform 0.15s, box-shadow 0.15s;
+}
+
+button:hover{
+    transform:translateY(-2px);
+    box-shadow:0 6px 12px rgba(0,0,0,0.15);
+}
+
+</style>
+</head>
+
+
+<body>
+
+<div class="container">
+
+<h1>Automatic FMEA Analysis Tool</h1>
+
+<form method="POST">
+
+<h2>Project Information</h2>
+
+<div class="grid-2">
+
+<div>
+<label>Project</label>
+<input type="text" name="project" required placeholder="Ex: Drone Alpha">
+</div>
+
+<div>
+<label>User Name</label>
+<input type="text" name="user_name" required>
+</div>
+
+<div>
+<label>Version</label>
+<input type="text" name="version" value="1.0">
+</div>
+
+<div>
+<label>Object Name</label>
+<input type="text" name="object_name" required placeholder="Ex: Quadcopter Model X">
+</div>
+
+</div>
+
+
+<h2>Technical Inputs</h2>
+
+<div class="section">
+
+<label>List of Parts (separated by commas)</label>
+<input type="text" name="piezas" required placeholder="Motor, Battery, GPS, Propeller">
+
+<label>Specifications (Power, Temperature, Consumption, etc.)</label>
+<textarea name="specs" rows="3"></textarea>
+
+<label>Product Requirements</label>
+<textarea name="requirements" rows="3"></textarea>
+
+<label>Reliability (lifetime, failure rate, etc.)</label>
+<textarea name="reliability" rows="2"></textarea>
+
+<label>Safety (burn risk, electrical faults, etc.)</label>
+<textarea name="safety" rows="2"></textarea>
+
+<label>Maintainability / Serviceability</label>
+<textarea name="maintainability" rows="2"></textarea>
+
+<label>Usability / Performance</label>
+<textarea name="usability" rows="2"></textarea>
+
+</div>
+
+<button type="submit">
+Generate FMEA & Download Excel
+</button>
+
+</form>
+
+</div>
+
+</body>
+</html>
