@@ -1,21 +1,18 @@
 import streamlit as st
 import pandas as pd
 import json
+import openai
 import os
-
-from openai import OpenAI
 
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
 
-
 # -------------------------------
-# OPENAI CLIENT
+# OPENAI CONFIG
 # -------------------------------
 
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 # -------------------------------
 # TEST MATRIX
@@ -37,7 +34,6 @@ FAILURE_MODES = [
 "total failure-breakage"
 ]
 
-
 # -------------------------------
 # UTILITY
 # -------------------------------
@@ -46,13 +42,11 @@ def clamp(value):
     value = int(value)
     return max(1, min(5, value))
 
-
 # -------------------------------
 # AI PROMPT
 # -------------------------------
 
 def build_prompt(form_data, part):
-
     return f"""
 You are an expert reliability engineer performing an FMEA.
 
@@ -104,7 +98,6 @@ Return ONLY valid JSON:
 ]
 """
 
-
 # -------------------------------
 # AI ENGINE
 # -------------------------------
@@ -124,18 +117,18 @@ def generate_fmea(form_data):
 
         prompt = build_prompt(form_data, part)
 
-        response = client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4.1-mini",
-            temperature=0.3,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role":"user", "content": prompt}],
+            temperature=0.3
         )
 
-        text = response.choices[0].message.content.strip()
+        text = response.choices[0].message['content'].strip()
 
         try:
             failures = json.loads(text)
         except:
-            st.warning("AI returned invalid JSON")
+            st.warning("AI returned invalid JSON. Showing raw response:")
             st.write(text)
             continue
 
@@ -150,8 +143,8 @@ def generate_fmea(form_data):
 
             f["Part"] = part
 
+            # Fill test matrix
             tests = f.get("Tests", [])
-
             for t in tests:
                 if t in TESTS_LIST:
                     f[t] = "X"
@@ -159,7 +152,6 @@ def generate_fmea(form_data):
             all_failures.append(f)
 
     return all_failures
-
 
 # -------------------------------
 # EXCEL GENERATOR
@@ -169,7 +161,7 @@ def create_fmea_excel(data, form_data):
 
     df = pd.DataFrame(data)
 
-    calc_cols = ['RPN', 'Priority', 'Risk Level', 'Ranking']
+    calc_cols = ['RPN','Priority','Risk Level','Ranking']
 
     for col in calc_cols:
         df[col] = ""
@@ -192,9 +184,7 @@ def create_fmea_excel(data, form_data):
     wb = load_workbook(file_name)
     ws = wb.active
 
-
     # Header info
-
     info = [
         ("PROJECT:", form_data.get("project")),
         ("USER NAME:", form_data.get("user_name")),
@@ -202,43 +192,36 @@ def create_fmea_excel(data, form_data):
         ("OBJECT NAME:", form_data.get("object_name"))
     ]
 
-    for i, (l, v) in enumerate(info, 1):
+    for i, (l,v) in enumerate(info,1):
         ws[f"A{i}"] = l
         ws[f"B{i}"] = v
         ws[f"A{i}"].font = Font(bold=True)
 
-
     # Header style
-
     blue_fill = PatternFill(start_color="1F4E78", fill_type="solid")
     white_font = Font(color="FFFFFF", bold=True)
-
-    for col in range(1, 17):
-        cell = ws.cell(row=6, column=col)
+    for col in range(1,17):
+        cell = ws.cell(row=6,column=col)
         cell.fill = blue_fill
         cell.font = white_font
         cell.alignment = Alignment(horizontal="center")
 
-
     last_row = ws.max_row
 
-    for r in range(7, last_row + 1):
-
+    for r in range(7,last_row+1):
         ws[f"L{r}"] = f"=G{r}*H{r}*I{r}"
         ws[f"M{r}"] = f"=J{r}*L{r}"
         ws[f"N{r}"] = f'=IF(L{r}<=8,"LOW",IF(L{r}<=18,"MEDIUM",IF(L{r}<=27,"URGENT","CRITICAL")))'
         ws[f"O{r}"] = f"=RANK(M{r},$M$7:$M${last_row},0)"
 
-
     # Test matrix
-
     start_test_col = 17
 
     ws.merge_cells(
         start_row=1,
         start_column=start_test_col,
         end_row=5,
-        end_column=start_test_col + len(TESTS_LIST) - 1
+        end_column=start_test_col + len(TESTS_LIST) -1
     )
 
     top_title = ws.cell(row=1, column=start_test_col)
@@ -246,23 +229,16 @@ def create_fmea_excel(data, form_data):
     top_title.font = Font(bold=True, size=14)
     top_title.alignment = Alignment(horizontal="center", vertical="center")
 
-
     for i, test in enumerate(TESTS_LIST):
-
         col = start_test_col + i
-
-        cell = ws.cell(row=6, column=col)
-
+        cell = ws.cell(row=6,column=col)
         cell.value = test
-        cell.alignment = Alignment(textRotation=90, horizontal="center", vertical="center")
-
+        cell.alignment = Alignment(textRotation=90,horizontal="center", vertical="center")
         ws.column_dimensions[get_column_letter(col)].width = 5
-
 
     wb.save(file_name)
 
     return file_name
-
 
 # -------------------------------
 # STREAMLIT UI
@@ -284,7 +260,6 @@ reliability = st.text_area("Reliability")
 safety = st.text_area("Safety")
 maintainability = st.text_area("Maintainability")
 usability = st.text_area("Usability")
-
 
 # -------------------------------
 # GENERATE BUTTON
@@ -313,7 +288,6 @@ if st.button("Generate FMEA & Download Excel"):
         file_path = create_fmea_excel(data, form_data)
 
     with open(file_path, "rb") as f:
-
         st.download_button(
             "Download Excel",
             f,
