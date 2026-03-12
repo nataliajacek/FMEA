@@ -1,8 +1,9 @@
+
+pytesseract
+Pillow
+pdfplumber
+openai
 streamlit
 pandas
 openpyxl
-openai
-pdfplumber
-pytesseract
-Pillow
 
