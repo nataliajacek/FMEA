@@ -6,35 +6,34 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openai import OpenAI
 import json
 import datetime
-import pytesseract
 from PIL import Image
 import pdfplumber
 import pytesseract
 
-# Optional: specify tesseract command path
-# On Linux Streamlit Cloud, it is usually just "tesseract"
-pytesseract.pytesseract.tesseract_cmd = "tesseract"
+# -------------------
+# Configure Tesseract for Streamlit Cloud
+# -------------------
+# On Streamlit Cloud, tesseract is installed at /usr/bin/tesseract
+pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
-# -----------------------------
+# -------------------
 # OpenAI client
-# -----------------------------
+# -------------------
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 st.title("AI-Assisted FMEA Generator – Powered by GPT-4.1-mini")
 
-# -----------------------------
-# Session state
-# -----------------------------
-for key in [
-    "user_name","product_name","product_description",
-    "subsystem","parts","functions","requirements","version"
-]:
+# -------------------
+# Session state for inputs
+# -------------------
+for key in ["user_name","product_name","product_description","subsystem",
+            "parts","functions","requirements","version","uploaded_files"]:
     if key not in st.session_state:
-        st.session_state[key] = datetime.date.today() if key=="version" else ""
+        st.session_state[key] = "" if key!="version" else datetime.date.today()
 
-# -----------------------------
-# Inputs
-# -----------------------------
+# -------------------
+# Input fields
+# -------------------
 st.subheader("Project Information")
 
 user_name = st.text_input("1. User Name", key="user_name")
@@ -45,18 +44,18 @@ subsystem = st.text_input("3. Subsystem to perform FMEA", key="subsystem")
 parts_input = st.text_area("4. List of Parts / Components (one per line)", key="parts")
 functions_input = st.text_area("5. Functions (one per line)", key="functions")
 requirements_input = st.text_area("6. Main Specs / Requirements (one per line)", key="requirements")
+
 version = st.date_input("7. Version / Date", key="version")
 
-st.subheader("Optional Files / Images (PDF, TXT, PNG, JPG)")
-uploaded_files = st.file_uploader(
-    "Upload any file with extra info for FMEA",
-    type=["pdf","txt","png","jpg","jpeg"],
-    accept_multiple_files=True
-)
+# -------------------
+# Optional file uploads
+# -------------------
+st.subheader("Optional: Upload files or images (PDF, PNG, JPG)")
+uploaded_files = st.file_uploader("Upload multiple files", type=['pdf','png','jpg','jpeg'], accept_multiple_files=True, key="uploaded_files")
 
-# -----------------------------
+# -------------------
 # Test columns
-# -----------------------------
+# -------------------
 test_columns = [
     "INVESTIGATION & TESTING","VENDOR - PART","DESIGN CHANGE","DIM & WORST CASE",
     "SIMULATION","CHARACTERIZE","CPPP","DIAGNOSTICS","FUNCTIONALITY",
@@ -65,9 +64,9 @@ test_columns = [
     "SW-FW TESTS","MFG TESTS","MAINTENANCE","SERVICEABILITY"
 ]
 
-# -----------------------------
+# -------------------
 # Helper functions
-# -----------------------------
+# -------------------
 def parse_cost(x):
     try:
         x = str(x)
@@ -88,24 +87,20 @@ def safe_json(text):
     return []
 
 def extract_file_content(files):
-    """Extract text from PDF, TXT, and OCR from images."""
-    all_text = ""
+    combined_text = ""
     for f in files:
-        if f.type=="application/pdf":
+        if f.type == "application/pdf":
             with pdfplumber.open(f) as pdf:
                 for page in pdf.pages:
-                    all_text += page.extract_text() + "\n"
-        elif f.type=="text/plain":
-            all_text += f.getvalue().decode("utf-8") + "\n"
-        elif f.type.startswith("image/"):
+                    combined_text += page.extract_text() + "\n"
+        else:  # image
             img = Image.open(f)
-            text = pytesseract.image_to_string(img)
-            all_text += text + "\n"
-    return all_text.strip()
+            combined_text += pytesseract.image_to_string(img) + "\n"
+    return combined_text.strip()
 
-# -----------------------------
+# -------------------
 # AI: Add missing essentials
-# -----------------------------
+# -------------------
 def ai_add_missing(functions, requirements, parts, file_text=""):
     prompt = f"""
 Product: {product_name}
@@ -115,10 +110,11 @@ Existing functions: {functions}
 Existing requirements: {requirements}
 Existing parts: {parts}
 
-Extra info from uploaded files:
+Additional info from uploaded files:
 {file_text}
 
-If important functions, requirements, or parts are missing, add them.
+If important functions, requirements, or parts are missing,
+add them.
 
 Return JSON:
 
@@ -143,18 +139,16 @@ Return JSON:
         pass
     return functions, requirements, parts
 
-# -----------------------------
+# -------------------
 # Generate FMEA
-# -----------------------------
+# -------------------
 def generate_fmea():
     functions = [f.strip() for f in functions_input.split("\n") if f.strip()]
     requirements = [r.strip() for r in requirements_input.split("\n") if r.strip()]
     parts = [p.strip() for p in parts_input.split("\n") if p.strip()]
 
-    # Extract uploaded file content
+    # extract file text if uploaded
     file_text = extract_file_content(uploaded_files) if uploaded_files else ""
-
-    # AI adds missing essentials
     functions, requirements, parts = ai_add_missing(functions, requirements, parts, file_text)
 
     if not functions or not requirements:
@@ -168,21 +162,17 @@ def generate_fmea():
 Product: {product_name}
 Description: {product_description}
 Subsystem: {subsystem}
-
 Parts: {parts}
-
 Function: {function}
+Requirements: {requirements}
 
-Requirements:
-{requirements}
-
-Extra info from uploaded files:
-{file_text}
-
-For EACH requirement generate **multiple failure scenarios** (no limit on causes).
-
+For EACH requirement generate **multiple failure scenarios**.
 Include:
-Function, Requirement, Failure Scenario, Part, Failure Mode, End Effects, Causes, Controls, Actions, Owner, Execution Phase, Severity (1-5), Occurrence (1-4), Detectability (1-3), Estimated Cost, Tests (from list), References.
+Function, Requirement, Failure Scenario, Part, Failure Mode, End Effects,
+Causes, Controls, Actions, Owner, Execution Phase,
+Severity (1-5), Occurrence (1-4), Detectability (1-3),
+Estimated Cost (Low(0.75) Medium(1) High(1.5) Very High(2)),
+Tests: {test_columns}, References
 
 Return ONLY JSON list.
 """
@@ -192,9 +182,7 @@ Return ONLY JSON list.
                 messages=[{"role":"user","content":prompt}],
                 temperature=0.3
             )
-
         failures = safe_json(response.choices[0].message.content)
-
         for f in failures:
             causes = f.get("Causes",[""])
             for cause in causes:
@@ -204,7 +192,6 @@ Return ONLY JSON list.
                 cost_text = f.get("Estimated Cost","Medium(1)")
                 cost_val = parse_cost(cost_text)
                 rpn = S*O*D
-
                 row = {
                     "Failure Scenario":f.get("Failure Scenario",""),
                     "Function":function,
@@ -225,43 +212,35 @@ Return ONLY JSON list.
                     "Reference Links":",".join(f.get("References",[])),
                     "Estimated Cost":cost_text
                 }
-
                 tests = f.get("tests",[])
                 for t in test_columns:
                     row[t] = "X" if t in tests else ""
-
                 rows.append(row)
-
     return pd.DataFrame(rows)
 
-# -----------------------------
+# -------------------
 # Generate button
-# -----------------------------
+# -------------------
 if st.button("Generate FMEA"):
     df = generate_fmea()
     if not df.empty:
         st.session_state.df = df
 
-# -----------------------------
+# -------------------
 # Editable table
-# -----------------------------
+# -------------------
 if "df" in st.session_state:
     st.subheader("Editable FMEA Table")
-    edited_df = st.data_editor(st.session_state.df,use_container_width=True)
-
+    edited_df = st.data_editor(st.session_state.df, use_container_width=True)
     edited_df["RPN"] = (
-        edited_df["Severity (S)"] *
-        edited_df["Occurrence (O)"] *
-        edited_df["Detectability (D)"]
+        edited_df["Severity (S)"] * edited_df["Occurrence (O)"] * edited_df["Detectability (D)"]
     )
-
     edited_df["Priority"] = edited_df["RPN"] * edited_df["Estimated Cost"].apply(parse_cost)
-
     st.session_state.df = edited_df
 
-    # -----------------------------
+    # -------------------
     # Excel Export
-    # -----------------------------
+    # -------------------
     wb = Workbook()
     ws = wb.active
     ws.title = "FMEA"
@@ -287,10 +266,4 @@ if "df" in st.session_state:
 
     output = BytesIO()
     wb.save(output)
-
-    st.download_button(
-        "Download Excel",
-        output.getvalue(),
-        file_name=f"FMEA_{product_name}.xlsx"
-    )
-
+    st.download_button("Download Excel", output.getvalue(), file_name=f"FMEA_{product_name}.xlsx")
