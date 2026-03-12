@@ -9,6 +9,11 @@ import datetime
 import pytesseract
 from PIL import Image
 import pdfplumber
+import pytesseract
+
+# Optional: specify tesseract command path
+# On Linux Streamlit Cloud, it is usually just "tesseract"
+pytesseract.pytesseract.tesseract_cmd = "tesseract"
 
 # -----------------------------
 # OpenAI client
@@ -288,3 +293,4 @@ if "df" in st.session_state:
         output.getvalue(),
         file_name=f"FMEA_{product_name}.xlsx"
     )
+
