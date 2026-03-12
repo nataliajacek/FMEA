@@ -1,297 +1,332 @@
 import streamlit as st
 import pandas as pd
+from io import BytesIO
+from openpyxl import Workbook
+from openai import OpenAI
 import json
-import openai
-import os
+import base64
+import pdfplumber
 
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill, Font, Alignment
-from openpyxl.utils import get_column_letter
+client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
-# -------------------------------
-# OPENAI CONFIG
-# -------------------------------
+st.title("AI-Assisted FMEA Generator – Powered by GPT-4.1-mini")
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# ----------------------------
+# INPUTS
+# ----------------------------
 
-# -------------------------------
-# TEST MATRIX
-# -------------------------------
+user_name = st.text_input("1. User name")
 
-TESTS_LIST = [
-"DESIGN CHANGE","DIM & WORST CASE","SIMULATION","REDESIGN","CHARACTERIZE",
-"CPPP","WORST CASING-TOLERANCE","FUNCTIONALITY TEST","DOE - SIGNAL LOSS TESTS",
-"OOBE & INSTALL","SYSTEM TEST WORKFLOWS","SPECS PERFORMANCE XPUT","SIT E2E APP",
-"USER ABUSE - TORTURE","HALT - HIGH ACCELERATED","BEST-BOARDS STRIFE TEST",
-"ALT - LIFE TEST","ROBUSTNESS","REGS EMC","REGS SAFETY","USABILITY",
-"SW-FW TESTS","DATA QUALITY","VENDOR PQAP","HASS MFG TESTS","MFG LINE TESTS",
-"MFG PPA","MAINTENANCE","DIAGNOSABILITY","SERVICEABILITY"
-]
+product_name = st.text_input("2. Product / Prototype name")
 
-FAILURE_MODES = [
-"degradation",
-"partial degradation",
-"total failure-breakage"
-]
+product_description = st.text_area("Product description")
 
-# -------------------------------
-# UTILITY
-# -------------------------------
+subsystem = st.text_input("3. Subsystem to perform FMEA")
 
-def clamp(value):
-    value = int(value)
-    return max(1, min(5, value))
+parts_input = st.text_area("4. List of parts (one per line)")
 
-# -------------------------------
-# AI PROMPT
-# -------------------------------
+functions_input = st.text_area("5. Functions (one per line)")
 
-def build_prompt(form_data, part):
-    return f"""
-You are an expert reliability engineer performing an FMEA.
+requirements_input = st.text_area("6. Main specs / requirements (one per line)")
 
-Product: {form_data.get('object_name')}
-Part: {part}
+version = st.text_input("7. Version / date")
 
-Specifications:
-{form_data.get('specs')}
+# ----------------------------
+# FILE UPLOAD
+# ----------------------------
 
-Requirements:
-{form_data.get('requirements')}
+st.subheader("Optional files or images")
 
-Reliability:
-{form_data.get('reliability')}
+uploaded_files = st.file_uploader(
+"Upload diagrams, datasheets or photos",
+type=["png","jpg","jpeg","pdf","txt"],
+accept_multiple_files=True
+)
 
-Safety:
-{form_data.get('safety')}
+# ----------------------------
+# FILE PROCESSING
+# ----------------------------
 
-Maintainability:
-{form_data.get('maintainability')}
+def extract_text(files):
 
-Usability:
-{form_data.get('usability')}
+    text = ""
+    images = []
 
-Generate multiple realistic failure scenarios.
+    for file in files:
 
-Also propose mitigation actions and which engineering tests detect the failure.
+        if file.type == "application/pdf":
 
-Available tests:
-{", ".join(TESTS_LIST)}
+            try:
+                with pdfplumber.open(file) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+            except:
+                pass
 
-Return ONLY valid JSON:
+        elif file.type == "text/plain":
 
-[
+            try:
+                text += file.read().decode("utf-8")
+            except:
+                pass
+
+        elif file.type.startswith("image"):
+
+            try:
+                img = base64.b64encode(file.read()).decode()
+                images.append(img)
+            except:
+                pass
+
+    return text, images
+
+# ----------------------------
+# SAFE JSON PARSER
+# ----------------------------
+
+def safe_json(text):
+
+    try:
+
+        start = text.find("[")
+        end = text.rfind("]")
+
+        if start != -1 and end != -1:
+            return json.loads(text[start:end+1])
+
+    except:
+        pass
+
+    return []
+
+# ----------------------------
+# ADD MISSING ENGINEERING ITEMS
+# ----------------------------
+
+def expand_engineering_lists(functions,requirements,parts,file_text):
+
+    prompt=f"""
+Product: {product_name}
+Description: {product_description}
+
+Existing functions:
+{functions}
+
+Existing requirements:
+{requirements}
+
+Existing parts:
+{parts}
+
+Additional file information:
+{file_text}
+
+Check if important functions, requirements, or parts are missing.
+
+Only add items if they are truly essential.
+
+Return JSON:
+
 {{
-"Failure":"",
-"Function":"",
-"Failure Mode":"degradation | partial degradation | total failure-breakage",
-"Effects":"",
-"Causes":"",
-"Severity":1,
-"Occurrence":1,
-"Detectability":1,
-"Cost":1,
-"Recommended Action":"",
-"Tests":["HALT - HIGH ACCELERATED","SYSTEM TEST WORKFLOWS"],
-"Links":""
+"functions":[],
+"requirements":[],
+"parts":[]
 }}
-]
 """
 
-# -------------------------------
-# AI ENGINE
-# -------------------------------
+    try:
 
-def generate_fmea(form_data):
+        r = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[{"role":"user","content":prompt}],
+        temperature=0.2
+        )
 
-    parts = form_data.get("piezas", "").split(",")
+        txt = r.choices[0].message.content
+        data = json.loads(txt[txt.find("{"):txt.rfind("}")+1])
 
-    all_failures = []
+        functions += data["functions"]
+        requirements += data["requirements"]
+        parts += data["parts"]
 
-    for part in parts:
+    except:
+        pass
 
-        part = part.strip()
+    return list(set(functions)), list(set(requirements)), list(set(parts))
 
-        if part == "":
-            continue
+# ----------------------------
+# FMEA GENERATION
+# ----------------------------
 
-        prompt = build_prompt(form_data, part)
+def generate_fmea():
 
-        response = openai.ChatCompletion.create(
+    functions=[f.strip() for f in functions_input.split("\n") if f.strip()]
+    requirements=[r.strip() for r in requirements_input.split("\n") if r.strip()]
+    parts=[p.strip() for p in parts_input.split("\n") if p.strip()]
+
+    file_text=""
+    images=[]
+
+    if uploaded_files:
+        file_text,images = extract_text(uploaded_files)
+
+    functions,requirements,parts = expand_engineering_lists(
+        functions,requirements,parts,file_text
+    )
+
+    if not functions:
+        functions=["General product operation"]
+
+    if not requirements:
+        requirements=["General safety"]
+
+    rows=[]
+
+    for function in functions:
+
+        prompt=f"""
+Product: {product_name}
+Description: {product_description}
+Subsystem: {subsystem}
+
+Parts:
+{parts}
+
+Function:
+{function}
+
+Requirements:
+{requirements}
+
+Additional info:
+{file_text}
+
+Generate MANY realistic engineering FMEA failures.
+
+For EACH requirement generate 5-8 failures.
+
+Return JSON list with:
+
+Failure Scenario
+Requirement
+Part
+Failure Mode
+End Effects
+Causes
+Controls
+Actions
+Owner
+Execution Phase
+Severity
+Occurrence
+Detectability
+Estimated Cost
+tests
+References
+"""
+
+        content=[{"type":"text","text":prompt}]
+
+        for img in images:
+            content.append({
+                "type":"image_url",
+                "image_url":{"url":f"data:image/jpeg;base64,{img}"}
+            })
+
+        r = client.chat.completions.create(
             model="gpt-4.1-mini",
-            messages=[{"role":"user", "content": prompt}],
+            messages=[{"role":"user","content":content}],
             temperature=0.3
         )
 
-        text = response.choices[0].message['content'].strip()
-
-        try:
-            failures = json.loads(text)
-        except:
-            st.warning("AI returned invalid JSON. Showing raw response:")
-            st.write(text)
-            continue
+        failures=safe_json(r.choices[0].message.content)
 
         for f in failures:
 
-            if f.get("Failure Mode") not in FAILURE_MODES:
-                f["Failure Mode"] = "degradation"
+            causes=f.get("Causes",[""])
 
-            f["Severity"] = clamp(f.get("Severity", 1))
-            f["Occurrence"] = clamp(f.get("Occurrence", 1))
-            f["Detectability"] = clamp(f.get("Detectability", 1))
+            for cause in causes:
 
-            f["Part"] = part
+                S=int(f.get("Severity",3))
+                O=int(f.get("Occurrence",2))
+                D=int(f.get("Detectability",2))
 
-            # Fill test matrix
-            tests = f.get("Tests", [])
-            for t in tests:
-                if t in TESTS_LIST:
-                    f[t] = "X"
+                rpn=S*O*D
 
-            all_failures.append(f)
+                rows.append({
+                "Failure Scenario":f.get("Failure Scenario",""),
+                "Function":function,
+                "Requirement":f.get("Requirement",""),
+                "Part":f.get("Part",""),
+                "Failure Mode":f.get("Failure Mode",""),
+                "End Effects":f.get("End Effects",""),
+                "Causes":cause,
+                "Controls":f.get("Controls",""),
+                "Severity":S,
+                "Occurrence":O,
+                "Detectability":D,
+                "RPN":rpn,
+                "Recommended Actions":",".join(f.get("Actions",[])),
+                "Owner":f.get("Owner",""),
+                "Execution Phase":f.get("Execution Phase",""),
+                "Tests":",".join(f.get("tests",[])),
+                "References":",".join(f.get("References",[])),
+                "Estimated Cost":f.get("Estimated Cost","Medium")
+                })
 
-    return all_failures
+    return pd.DataFrame(rows)
 
-# -------------------------------
-# EXCEL GENERATOR
-# -------------------------------
+# ----------------------------
+# GENERATE BUTTON
+# ----------------------------
 
-def create_fmea_excel(data, form_data):
+if st.button("Generate FMEA"):
 
-    df = pd.DataFrame(data)
+    df = generate_fmea()
 
-    calc_cols = ['RPN','Priority','Risk Level','Ranking']
+    if df.empty:
+        st.warning("AI returned no results. Try again.")
+    else:
+        st.session_state.df=df
 
-    for col in calc_cols:
-        df[col] = ""
+# ----------------------------
+# EDITABLE TABLE
+# ----------------------------
 
-    for t in TESTS_LIST:
-        if t not in df.columns:
-            df[t] = ""
+if "df" in st.session_state:
 
-    base_cols = [
-        "Part","Failure","Function","Failure Mode","Effects","Causes",
-        "Severity","Occurrence","Detectability","Cost",
-        "Recommended Action",
-        "RPN","Priority","Risk Level","Ranking","Links"
-    ]
-
-    file_name = f"FMEA_{form_data.get('project','Project')}.xlsx"
-
-    df[base_cols + TESTS_LIST].to_excel(file_name, index=False, startrow=5)
-
-    wb = load_workbook(file_name)
-    ws = wb.active
-
-    # Header info
-    info = [
-        ("PROJECT:", form_data.get("project")),
-        ("USER NAME:", form_data.get("user_name")),
-        ("VERSION:", form_data.get("version")),
-        ("OBJECT NAME:", form_data.get("object_name"))
-    ]
-
-    for i, (l,v) in enumerate(info,1):
-        ws[f"A{i}"] = l
-        ws[f"B{i}"] = v
-        ws[f"A{i}"].font = Font(bold=True)
-
-    # Header style
-    blue_fill = PatternFill(start_color="1F4E78", fill_type="solid")
-    white_font = Font(color="FFFFFF", bold=True)
-    for col in range(1,17):
-        cell = ws.cell(row=6,column=col)
-        cell.fill = blue_fill
-        cell.font = white_font
-        cell.alignment = Alignment(horizontal="center")
-
-    last_row = ws.max_row
-
-    for r in range(7,last_row+1):
-        ws[f"L{r}"] = f"=G{r}*H{r}*I{r}"
-        ws[f"M{r}"] = f"=J{r}*L{r}"
-        ws[f"N{r}"] = f'=IF(L{r}<=8,"LOW",IF(L{r}<=18,"MEDIUM",IF(L{r}<=27,"URGENT","CRITICAL")))'
-        ws[f"O{r}"] = f"=RANK(M{r},$M$7:$M${last_row},0)"
-
-    # Test matrix
-    start_test_col = 17
-
-    ws.merge_cells(
-        start_row=1,
-        start_column=start_test_col,
-        end_row=5,
-        end_column=start_test_col + len(TESTS_LIST) -1
+    edited_df = st.data_editor(
+        st.session_state.df,
+        use_container_width=True
     )
 
-    top_title = ws.cell(row=1, column=start_test_col)
-    top_title.value = "INVESTIGATION & TESTING"
-    top_title.font = Font(bold=True, size=14)
-    top_title.alignment = Alignment(horizontal="center", vertical="center")
+# ----------------------------
+# EXCEL EXPORT
+# ----------------------------
 
-    for i, test in enumerate(TESTS_LIST):
-        col = start_test_col + i
-        cell = ws.cell(row=6,column=col)
-        cell.value = test
-        cell.alignment = Alignment(textRotation=90,horizontal="center", vertical="center")
-        ws.column_dimensions[get_column_letter(col)].width = 5
+    wb=Workbook()
+    ws=wb.active
 
-    wb.save(file_name)
+    ws.append(list(edited_df.columns))
 
-    return file_name
+    for r,row in enumerate(edited_df.values,2):
+        for c,val in enumerate(row,1):
 
-# -------------------------------
-# STREAMLIT UI
-# -------------------------------
+            if isinstance(val,list):
+                val=", ".join(val)
 
-st.title("AI Assisted FMEA Generator")
+            if val is None:
+                val=""
 
-project = st.text_input("Project")
-user_name = st.text_input("User Name")
-version = st.text_input("Version")
-object_name = st.text_input("Object Name")
+            ws.cell(row=r,column=c,value=str(val))
 
-st.subheader("Technical Inputs")
+    buffer=BytesIO()
+    wb.save(buffer)
 
-piezas = st.text_input("Parts (comma separated)")
-specs = st.text_area("Specifications")
-requirements = st.text_area("Requirements")
-reliability = st.text_area("Reliability")
-safety = st.text_area("Safety")
-maintainability = st.text_area("Maintainability")
-usability = st.text_area("Usability")
-
-# -------------------------------
-# GENERATE BUTTON
-# -------------------------------
-
-if st.button("Generate FMEA & Download Excel"):
-
-    form_data = {
-        "project": project,
-        "user_name": user_name,
-        "version": version,
-        "object_name": object_name,
-        "piezas": piezas,
-        "specs": specs,
-        "requirements": requirements,
-        "reliability": reliability,
-        "safety": safety,
-        "maintainability": maintainability,
-        "usability": usability
-    }
-
-    with st.spinner("Generating AI FMEA..."):
-
-        data = generate_fmea(form_data)
-
-        file_path = create_fmea_excel(data, form_data)
-
-    with open(file_path, "rb") as f:
-        st.download_button(
-            "Download Excel",
-            f,
-            file_name=file_path
-        )
-
-    st.success("FMEA Generated Successfully!")
+    st.download_button(
+        "Download Excel",
+        buffer.getvalue(),
+        file_name=f"FMEA_{product_name}.xlsx"
+    )
